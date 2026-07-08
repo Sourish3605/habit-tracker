@@ -121,6 +121,7 @@ h1,h2,h3{ font-family:'Space Grotesk', 'Inter', sans-serif; margin:0; }
 .streak-badge{ display:flex; align-items:center; gap:4px; font-size:12px; color:#95651a; background:var(--amber-soft); padding:3px 9px; border-radius:20px; font-weight:600; font-family:'JetBrains Mono',monospace; flex-shrink:0; }
 .time-badge{ display:flex; align-items:center; gap:4px; font-size:11.5px; color:var(--ink-muted); background:var(--surface-2); padding:3px 9px; border-radius:20px; font-weight:600; font-family:'JetBrains Mono',monospace; flex-shrink:0; }
 .time-badge.overdue{ color:#8a3a24; background:#F6DCD3; }
+.time-badge.duenow{ color:#8a5a12; background:var(--amber-soft); }
 
 .tabs{ display:flex; gap:6px; flex-wrap:wrap; }
 .tab{ font-size:12px; font-weight:600; padding:6px 12px; border-radius:20px; border:1px solid var(--border); background:#fff; color:var(--ink-muted); cursor:pointer; }
@@ -284,7 +285,9 @@ h1,h2,h3{ font-family:'Space Grotesk', 'Inter', sans-serif; margin:0; }
             <option value="2">2x / week</option>
             <option value="1">1x / week</option>
           </select>
-          <input id="habitReminderInput" type="time" title="Optional daily reminder"/>
+          <input id="habitReminderStartInput" type="time" title="Reminder start time"/>
+          <span class="form-label" style="margin:0;">to</span>
+          <input id="habitReminderEndInput" type="time" title="Reminder end time"/>
         </div>
         <div class="form-row">
           <span class="form-label">Color</span>
@@ -432,6 +435,28 @@ h1,h2,h3{ font-family:'Space Grotesk', 'Inter', sans-serif; margin:0; }
     var r = parseInt(h.substring(0,2),16), g = parseInt(h.substring(2,4),16), b = parseInt(h.substring(4,6),16);
     return 'rgba(' + r + ',' + g + ',' + b + ',' + alpha + ')';
   }
+  function timeToMinutes(hhmm){
+    var p = hhmm.split(':');
+    return parseInt(p[0],10)*60 + parseInt(p[1],10);
+  }
+  function addMinutesToTime(hhmm, minutesToAdd){
+    var total = timeToMinutes(hhmm) + minutesToAdd;
+    if(total > 23*60+59) total = 23*60+59;
+    var hh = Math.floor(total/60), mm = total%60;
+    return pad(hh) + ':' + pad(mm);
+  }
+  function formatTime12(hhmm){
+    if(!hhmm) return '';
+    var p = hhmm.split(':'), hh = parseInt(p[0],10), mm = p[1];
+    var ampm = hh >= 12 ? 'PM' : 'AM';
+    var h12 = hh % 12; if(h12 === 0) h12 = 12;
+    return h12 + ':' + mm + ' ' + ampm;
+  }
+  function reminderRangeLabel(h){
+    if(!h.reminderStart) return '';
+    if(h.reminderEnd) return formatTime12(h.reminderStart) + ' \u2013 ' + formatTime12(h.reminderEnd);
+    return formatTime12(h.reminderStart);
+  }
 
   // ---------- storage ----------
   var storageAvailable = !!(window.storage && typeof window.storage.get === 'function' && typeof window.storage.set === 'function');
@@ -448,7 +473,11 @@ h1,h2,h3{ font-family:'Space Grotesk', 'Inter', sans-serif; margin:0; }
               state.settings = Object.assign({}, DEFAULT_SETTINGS, state.settings || {});
               state.habits.forEach(function(h){
                 if(h.icon === undefined) h.icon = '';
-                if(h.reminderTime === undefined) h.reminderTime = '';
+                if(h.reminderStart === undefined){
+                  if(h.reminderTime){ h.reminderStart = h.reminderTime; h.reminderEnd = addMinutesToTime(h.reminderTime, 60); }
+                  else { h.reminderStart = ''; h.reminderEnd = ''; }
+                }
+                if(h.reminderEnd === undefined) h.reminderEnd = '';
               });
             }
           }
@@ -498,9 +527,9 @@ h1,h2,h3{ font-family:'Space Grotesk', 'Inter', sans-serif; margin:0; }
   // ---------- habit mutations ----------
   function nextColor(){ return PALETTE[state.habits.length % PALETTE.length]; }
 
-  function addHabit(name, targetPerWeek, color, icon, reminderTime){
+  function addHabit(name, targetPerWeek, color, icon, reminderStart, reminderEnd){
     var id = 'h_' + Date.now() + '_' + Math.random().toString(36).slice(2,7);
-    state.habits.push({ id: id, name: name, color: color || nextColor(), icon: icon || '', targetPerWeek: targetPerWeek || 7, reminderTime: reminderTime || '', createdAt: todayStr() });
+    state.habits.push({ id: id, name: name, color: color || nextColor(), icon: icon || '', targetPerWeek: targetPerWeek || 7, reminderStart: reminderStart || '', reminderEnd: reminderEnd || '', createdAt: todayStr() });
     state.entries[id] = {};
     saveState();
     render();
@@ -804,9 +833,9 @@ h1,h2,h3{ font-family:'Space Grotesk', 'Inter', sans-serif; margin:0; }
     var now = new Date();
     var nowMinutes = now.getHours()*60 + now.getMinutes();
     state.habits.forEach(function(h){
-      if(!h.reminderTime) return;
+      if(!h.reminderStart) return;
       if(isDone(h.id, t)) return;
-      var parts = h.reminderTime.split(':');
+      var parts = h.reminderStart.split(':');
       var remMinutes = parseInt(parts[0],10)*60 + parseInt(parts[1],10);
       var key = h.id + '_' + t;
       if(nowMinutes >= remMinutes && !shownReminders[key]){
@@ -824,21 +853,28 @@ h1,h2,h3{ font-family:'Space Grotesk', 'Inter', sans-serif; margin:0; }
     var s = date.getFullYear() + pad(date.getMonth()+1) + pad(date.getDate()) + 'T' + pad(hh) + pad(mm) + '00';
     return withZ ? s + 'Z' : s;
   }
+  function icsDuration(h){
+    if(h.reminderEnd){
+      var diff = timeToMinutes(h.reminderEnd) - timeToMinutes(h.reminderStart);
+      if(diff > 0) return 'PT' + diff + 'M';
+    }
+    return 'PT30M';
+  }
   function generateICS(){
     var now = new Date();
-    var habitsWithReminders = state.habits.filter(function(h){ return !!h.reminderTime; });
+    var habitsWithReminders = state.habits.filter(function(h){ return !!h.reminderStart; });
     var lines = ['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//Streakline//Habit Reminders//EN','CALSCALE:GREGORIAN'];
     habitsWithReminders.forEach(function(h){
-      var parts = h.reminderTime.split(':');
+      var parts = h.reminderStart.split(':');
       var hh = parseInt(parts[0],10), mm = parseInt(parts[1],10);
       lines.push('BEGIN:VEVENT');
       lines.push('UID:streakline-' + h.id + '@habit-tracker');
       lines.push('DTSTAMP:' + icsDateTime(now, now.getUTCHours(), now.getUTCMinutes(), true));
       lines.push('DTSTART:' + icsDateTime(now, hh, mm, false));
-      lines.push('DURATION:PT15M');
+      lines.push('DURATION:' + icsDuration(h));
       lines.push('RRULE:FREQ=DAILY');
       lines.push('SUMMARY:' + icsEscape((h.icon ? h.icon + ' ' : '') + h.name));
-      lines.push('DESCRIPTION:' + icsEscape('Habit reminder from Streakline'));
+      lines.push('DESCRIPTION:' + icsEscape('Habit reminder from Streakline' + (h.reminderEnd ? ' \u00b7 ' + reminderRangeLabel(h) : '')));
       lines.push('BEGIN:VALARM');
       lines.push('ACTION:DISPLAY');
       lines.push('DESCRIPTION:' + icsEscape('Time for: ' + h.name));
@@ -900,21 +936,37 @@ h1,h2,h3{ font-family:'Space Grotesk', 'Inter', sans-serif; margin:0; }
       '<div class="stat-card"><span class="stat-label">This month</span><span class="stat-value">' + overallMonthPct + '%</span></div>';
   }
 
+  function sortedForToday(){
+    var arr = state.habits.slice();
+    arr.sort(function(a, b){
+      var aHas = !!a.reminderStart, bHas = !!b.reminderStart;
+      if(aHas && bHas) return timeToMinutes(a.reminderStart) - timeToMinutes(b.reminderStart);
+      if(aHas && !bHas) return -1;
+      if(!aHas && bHas) return 1;
+      return 0;
+    });
+    return arr;
+  }
+
   function renderToday(){
     var list = document.getElementById('todayList');
     var t = todayStr();
     var now = new Date();
     var nowMinutes = now.getHours()*60 + now.getMinutes();
     document.getElementById('todayDateLabel').textContent = now.toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric' });
-    list.innerHTML = state.habits.map(function(h){
+    list.innerHTML = sortedForToday().map(function(h){
       var done = isDone(h.id, t);
       var streak = currentStreak(h.id);
       var reminderHtml = '';
-      if(h.reminderTime){
-        var parts = h.reminderTime.split(':');
-        var remMinutes = parseInt(parts[0],10)*60 + parseInt(parts[1],10);
-        var overdue = !done && nowMinutes >= remMinutes;
-        reminderHtml = '<span class="time-badge ' + (overdue ? 'overdue' : '') + '">' + clockIcon() + ' ' + h.reminderTime + '</span>';
+      if(h.reminderStart){
+        var startMin = timeToMinutes(h.reminderStart);
+        var endMin = h.reminderEnd ? timeToMinutes(h.reminderEnd) : startMin;
+        var statusClass = '';
+        if(!done){
+          if(nowMinutes > endMin) statusClass = 'overdue';
+          else if(nowMinutes >= startMin) statusClass = 'duenow';
+        }
+        reminderHtml = '<span class="time-badge ' + statusClass + '">' + clockIcon() + ' ' + reminderRangeLabel(h) + '</span>';
       }
       return '<div class="today-row ' + (done ? 'done' : '') + '">' +
         '<button class="check-toggle" data-toggle-today="' + h.id + '" aria-label="Mark ' + escapeHtml(h.name) + '">' + (done ? checkIcon() : '') + '</button>' +
@@ -1074,7 +1126,9 @@ h1,h2,h3{ font-family:'Space Grotesk', 'Inter', sans-serif; margin:0; }
           '<div class="form-row">' +
           '<input type="text" class="edit-name-input" id="editName_' + h.id + '" value="' + escapeHtml(h.name) + '" maxlength="40"/>' +
           '<select class="edit-target-input" id="editTarget_' + h.id + '">' + targetOptionsHtml(h.targetPerWeek) + '</select>' +
-          '<input type="time" class="edit-reminder-input" id="editReminder_' + h.id + '" value="' + (h.reminderTime||'') + '"/>' +
+          '<input type="time" class="edit-reminder-input" id="editReminderStart_' + h.id + '" value="' + (h.reminderStart||'') + '"/>' +
+          '<span class="form-label" style="margin:0;">to</span>' +
+          '<input type="time" class="edit-reminder-input" id="editReminderEnd_' + h.id + '" value="' + (h.reminderEnd||'') + '"/>' +
           '</div>' +
           '<div class="form-row">' +
           '<span class="form-label">Color</span><div class="swatch-row" data-edit-swatch-for="' + h.id + '">' + colorSwatchesHtml(editHabitColor, 'editcolor') + '</div>' +
@@ -1095,7 +1149,7 @@ h1,h2,h3{ font-family:'Space Grotesk', 'Inter', sans-serif; margin:0; }
         '</div>' +
         habitChip(h) +
         '<span class="manage-name">' + escapeHtml(h.name) + '</span>' +
-        '<span class="manage-target">' + targetLabel + (h.reminderTime ? ' · ' + h.reminderTime : '') + '</span>' +
+        '<span class="manage-target">' + targetLabel + (h.reminderStart ? ' · ' + reminderRangeLabel(h) : '') + '</span>' +
         '<div class="manage-actions">' +
         '<button class="icon-btn plain" data-edit="' + h.id + '" aria-label="Edit habit">✎</button>' +
         '<button class="icon-btn danger" data-delete="' + h.id + '" aria-label="Delete habit">✕</button>' +
@@ -1166,13 +1220,15 @@ h1,h2,h3{ font-family:'Space Grotesk', 'Inter', sans-serif; margin:0; }
       e.preventDefault();
       var nameInput = document.getElementById('habitNameInput');
       var targetInput = document.getElementById('habitTargetInput');
-      var reminderInput = document.getElementById('habitReminderInput');
+      var reminderStartInput = document.getElementById('habitReminderStartInput');
+      var reminderEndInput = document.getElementById('habitReminderEndInput');
       var name = nameInput.value.trim();
       if(!name) return;
-      addHabit(name, parseInt(targetInput.value, 10), newHabitColor, newHabitIcon, reminderInput.value);
+      addHabit(name, parseInt(targetInput.value, 10), newHabitColor, newHabitIcon, reminderStartInput.value, reminderEndInput.value);
       nameInput.value = '';
       targetInput.value = '7';
-      reminderInput.value = '';
+      reminderStartInput.value = '';
+      reminderEndInput.value = '';
       document.getElementById('addHabitPanel').style.display = 'none';
     });
 
@@ -1282,10 +1338,11 @@ h1,h2,h3{ font-family:'Space Grotesk', 'Inter', sans-serif; margin:0; }
         var sid = saveEditBtn.getAttribute('data-save-edit');
         var nameEl = document.getElementById('editName_' + sid);
         var targetEl = document.getElementById('editTarget_' + sid);
-        var reminderEl = document.getElementById('editReminder_' + sid);
+        var reminderStartEl = document.getElementById('editReminderStart_' + sid);
+        var reminderEndEl = document.getElementById('editReminderEnd_' + sid);
         var newName = nameEl.value.trim();
         if(!newName){ nameEl.focus(); return; }
-        updateHabit(sid, { name: newName, targetPerWeek: parseInt(targetEl.value,10), reminderTime: reminderEl.value, color: editHabitColor, icon: editHabitIcon });
+        updateHabit(sid, { name: newName, targetPerWeek: parseInt(targetEl.value,10), reminderStart: reminderStartEl.value, reminderEnd: reminderEndEl.value, color: editHabitColor, icon: editHabitIcon });
         editingHabitId = null;
         return;
       }
